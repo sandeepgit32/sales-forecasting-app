@@ -5,8 +5,14 @@ import time
 from datetime import timedelta
 import redis
 import pandas as pd
+import numpy as np
 from sqlalchemy import text
 from common.db import engine, SessionLocal
+from prophet import Prophet
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+import warnings
+warnings.filterwarnings('ignore')
 
 REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
 HORIZON = int(os.getenv('FORECAST_HORIZON_DAYS', '30'))
@@ -35,6 +41,120 @@ wait_for_services()
 r = redis.from_url(REDIS_URL)
 DB = SessionLocal()
 
+def forecast_prophet(df, horizon):
+    """Generate forecast using FB Prophet"""
+    try:
+        # Prepare data for Prophet
+        prophet_df = df.reset_index().rename(columns={'date': 'ds', 'sales': 'y'})
+        
+        # Create and fit model
+        model = Prophet(
+            interval_width=0.95,
+            daily_seasonality=False,
+            weekly_seasonality=True,
+            yearly_seasonality=True
+        )
+        model.fit(prophet_df)
+        
+        # Create future dataframe
+        future = model.make_future_dataframe(periods=horizon, freq='D')
+        
+        # Make predictions
+        forecast = model.predict(future)
+        
+        # Extract only future predictions
+        forecast = forecast.tail(horizon)
+        
+        return forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].rename(
+            columns={'ds': 'date', 'yhat': 'forecast', 'yhat_lower': 'lower', 'yhat_upper': 'upper'}
+        )
+    except Exception as e:
+        print(f"Prophet forecast error: {e}")
+        return None
+
+def forecast_sarimax(df, horizon):
+    """Generate forecast using SARIMAX"""
+    try:
+        # Ensure we have enough data
+        if len(df) < 14:
+            return None
+        
+        # Fit SARIMAX model with simple parameters
+        model = SARIMAX(
+            df['sales'],
+            order=(1, 1, 1),
+            seasonal_order=(1, 1, 1, 7),
+            enforce_stationarity=False,
+            enforce_invertibility=False
+        )
+        
+        fitted_model = model.fit(disp=False, maxiter=100)
+        
+        # Generate forecast
+        forecast_result = fitted_model.get_forecast(steps=horizon)
+        forecast_mean = forecast_result.predicted_mean
+        forecast_ci = forecast_result.conf_int(alpha=0.05)
+        
+        # Create result dataframe
+        last_date = df.index.max()
+        forecast_dates = pd.date_range(start=last_date + timedelta(days=1), periods=horizon, freq='D')
+        
+        result = pd.DataFrame({
+            'date': forecast_dates,
+            'forecast': forecast_mean.values,
+            'lower': forecast_ci.iloc[:, 0].values,
+            'upper': forecast_ci.iloc[:, 1].values
+        })
+        
+        return result
+    except Exception as e:
+        print(f"SARIMAX forecast error: {e}")
+        return None
+
+def forecast_holt_winters(df, horizon):
+    """Generate forecast using Holt-Winters Exponential Smoothing"""
+    try:
+        # Ensure we have enough data
+        if len(df) < 14:
+            return None
+        
+        # Fit Holt-Winters model
+        model = ExponentialSmoothing(
+            df['sales'],
+            seasonal_periods=7,
+            trend='add',
+            seasonal='add',
+            initialization_method='estimated'
+        )
+        
+        fitted_model = model.fit()
+        
+        # Generate forecast
+        forecast_values = fitted_model.forecast(steps=horizon)
+        
+        # Calculate confidence intervals (approximate using standard error)
+        residuals = fitted_model.fittedvalues - df['sales']
+        std_error = np.std(residuals)
+        
+        # 95% confidence interval (approximately 1.96 * std error)
+        margin = 1.96 * std_error
+        
+        # Create result dataframe
+        last_date = df.index.max()
+        forecast_dates = pd.date_range(start=last_date + timedelta(days=1), periods=horizon, freq='D')
+        
+        result = pd.DataFrame({
+            'date': forecast_dates,
+            'forecast': forecast_values.values,
+            'lower': (forecast_values - margin).values,
+            'upper': (forecast_values + margin).values
+        })
+        
+        return result
+    except Exception as e:
+        print(f"Holt-Winters forecast error: {e}")
+        return None
+
 def process_batch(batch_num):
     # Find distinct categories updated in this batch
     res = DB.execute(text('SELECT DISTINCT category FROM invoice_data WHERE batch_num = :batch'), {'batch': batch_num})
@@ -48,22 +168,58 @@ def process_batch(batch_num):
             engine,
             params={'cat': cat}
         )
-        if df.empty:
+        if df.empty or len(df) < 7:
+            print(f"Skipping category {cat}: insufficient data (need at least 7 days)")
             continue
+            
         df['date'] = pd.to_datetime(df['date'])
         df = df.set_index('date')
 
-        # Simple baseline forecast: mean of last 7 days
-        last_vals = df['sales'].tail(7)
-        baseline = float(last_vals.mean()) if not last_vals.empty else float(df['sales'].mean())
-
+        # Generate forecasts for each model
         forecasts = []
-        last_date = df.index.max()
-        for i in range(1, HORIZON+1):
-            fdate = (last_date + timedelta(days=i)).date()
-            # same baseline for all models for now
-            for model in ('prophet','sarimax','holt_winters'):
-                forecasts.append({'forecast_date': fdate, 'category': cat, 'model_type': model, 'forecast_value': round(baseline, 2), 'lower_bound': None, 'upper_bound': None})
+        
+        # Prophet forecast
+        prophet_result = forecast_prophet(df, HORIZON)
+        if prophet_result is not None:
+            for _, row in prophet_result.iterrows():
+                forecasts.append({
+                    'forecast_date': row['date'].date(),
+                    'category': cat,
+                    'model_type': 'prophet',
+                    'forecast_value': round(float(row['forecast']), 2),
+                    'lower_bound': round(float(row['lower']), 2),
+                    'upper_bound': round(float(row['upper']), 2)
+                })
+        
+        # SARIMAX forecast
+        sarimax_result = forecast_sarimax(df, HORIZON)
+        if sarimax_result is not None:
+            for _, row in sarimax_result.iterrows():
+                forecasts.append({
+                    'forecast_date': row['date'].date(),
+                    'category': cat,
+                    'model_type': 'sarimax',
+                    'forecast_value': round(float(row['forecast']), 2),
+                    'lower_bound': round(float(row['lower']), 2),
+                    'upper_bound': round(float(row['upper']), 2)
+                })
+        
+        # Holt-Winters forecast
+        hw_result = forecast_holt_winters(df, HORIZON)
+        if hw_result is not None:
+            for _, row in hw_result.iterrows():
+                forecasts.append({
+                    'forecast_date': row['date'].date(),
+                    'category': cat,
+                    'model_type': 'holt_winters',
+                    'forecast_value': round(float(row['forecast']), 2),
+                    'lower_bound': round(float(row['lower']), 2),
+                    'upper_bound': round(float(row['upper']), 2)
+                })
+
+        if not forecasts:
+            print(f"No forecasts generated for category {cat}")
+            continue
 
         # upsert forecasts with new connection and transaction
         conn = engine.connect()

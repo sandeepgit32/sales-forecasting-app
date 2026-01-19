@@ -50,7 +50,9 @@
           <h5 class="card-title">
             {{ selectedCategory }} - {{ getModelName(selectedModel) }} Forecast
           </h5>
-          <canvas ref="chartCanvas"></canvas>
+          <div class="chart-container">
+            <canvas ref="chartCanvas"></canvas>
+          </div>
         </div>
       </div>
 
@@ -154,33 +156,46 @@ export default {
         forecastData.value = forecastResponse.data
           .sort((a, b) => new Date(a.forecast_date) - new Date(b.forecast_date))
 
+        loading.value = false
         await nextTick()
         renderChart()
       } catch (error) {
         console.error('Error loading data:', error)
-      } finally {
         loading.value = false
       }
     }
 
     const renderChart = () => {
-      if (!chartCanvas.value) return
+      if (!chartCanvas.value) {
+        console.error('Canvas element not found')
+        return
+      }
 
       // Destroy existing chart
       if (chartInstance) {
         chartInstance.destroy()
+        chartInstance = null
       }
 
       const ctx = chartCanvas.value.getContext('2d')
+      if (!ctx) {
+        console.error('Cannot get 2D context')
+        return
+      }
 
       // Prepare data
       const historicalLabels = historicalData.value.map(d => d.date)
       const historicalValues = historicalData.value.map(d => d.sales)
 
       const forecastLabels = forecastData.value.map(d => d.forecast_date)
-      const forecastValues = forecastData.value.map(d => d.forecast_value)
-      const lowerBounds = forecastData.value.map(d => d.lower_bound || d.forecast_value * 0.9)
-      const upperBounds = forecastData.value.map(d => d.upper_bound || d.forecast_value * 1.1)
+      const forecastValues = forecastData.value.map(d => parseFloat(d.forecast_value))
+      const lowerBounds = forecastData.value.map(d => d.lower_bound !== null ? parseFloat(d.lower_bound) : parseFloat(d.forecast_value) * 0.9)
+      const upperBounds = forecastData.value.map(d => d.upper_bound !== null ? parseFloat(d.upper_bound) : parseFloat(d.forecast_value) * 1.1)
+
+      console.log('Rendering chart with:', {
+        historicalPoints: historicalLabels.length,
+        forecastPoints: forecastLabels.length
+      })
 
       // Combine labels
       const allLabels = [...historicalLabels, ...forecastLabels]
@@ -207,79 +222,85 @@ export default {
           fill: false
         },
         {
-          label: 'Upper CI (95%)',
-          data: [...Array(historicalLabels.length).fill(null), ...upperBounds],
-          borderColor: 'rgba(220, 53, 69, 0.3)',
-          backgroundColor: 'rgba(220, 53, 69, 0.1)',
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: '+1'
-        },
-        {
           label: 'Lower CI (95%)',
           data: [...Array(historicalLabels.length).fill(null), ...lowerBounds],
           borderColor: 'rgba(220, 53, 69, 0.3)',
-          backgroundColor: 'rgba(220, 53, 69, 0.2)',
+          backgroundColor: 'rgba(220, 53, 69, 0.05)',
           borderWidth: 1,
           pointRadius: 0,
           fill: false
+        },
+        {
+          label: 'Upper CI (95%)',
+          data: [...Array(historicalLabels.length).fill(null), ...upperBounds],
+          borderColor: 'rgba(220, 53, 69, 0.3)',
+          backgroundColor: 'rgba(220, 53, 69, 0.15)',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: '-1'
         }
       ]
 
-      chartInstance = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: allLabels,
-          datasets: datasets
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: true,
-          interaction: {
-            mode: 'index',
-            intersect: false
+      try {
+        chartInstance = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: allLabels,
+            datasets: datasets
           },
-          plugins: {
-            title: {
-              display: true,
-              text: `${selectedCategory.value} Sales Forecast - ${getModelName(selectedModel.value)}`
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+              mode: 'index',
+              intersect: false
             },
-            legend: {
-              display: true,
-              position: 'top'
+            plugins: {
+              title: {
+                display: true,
+                text: `${selectedCategory.value} Sales Forecast - ${getModelName(selectedModel.value)}`
+              },
+              legend: {
+                display: true,
+                position: 'top'
+              },
+              tooltip: {
+                callbacks: {
+                  label: function(context) {
+                    let label = context.dataset.label || ''
+                    if (label) {
+                      label += ': '
+                    }
+                    if (context.parsed.y !== null) {
+                      label += formatNumber(context.parsed.y)
+                    }
+                    return label
+                  }
+                }
+              }
             },
-            tooltip: {
-              callbacks: {
-                label: function(context) {
-                  let label = context.dataset.label || ''
-                  if (label) {
-                    label += ': '
-                  }
-                  if (context.parsed.y !== null) {
-                    label += formatNumber(context.parsed.y)
-                  }
-                  return label
+            scales: {
+              y: {
+                beginAtZero: false,
+                title: {
+                  display: true,
+                  text: 'Sales'
+                }
+              },
+              x: {
+                title: {
+                  display: true,
+                  text: 'Date'
                 }
               }
             }
-          },
-          scales: {
-            y: {
-              beginAtZero: false,
-              title: {
-                display: true,
-                text: 'Sales'
-              }
-            },
-            x: {
-              title: {
-                display: true,
-                text: 'Date'
-              }
-            }
           }
-        }
-      })
+        })
+
+        console.log('Chart created successfully:', chartInstance)
+      } catch (error) {
+        console.error('Error creating chart:', error)
+      }
     }
 
     const getModelName = (model) => {
@@ -317,7 +338,14 @@ export default {
 </script>
 
 <style scoped>
+.chart-container {
+  position: relative;
+  height: 450px;
+  width: 100%;
+}
+
 canvas {
-  max-height: 400px;
+  width: 100% !important;
+  height: 100% !important;
 }
 </style>
