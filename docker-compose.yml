@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+    networks:
+      - ts-net
+
+  api:
+    build: ./backend
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+      - REDIS_URL=redis://redis:6379/0
+      - UPLOAD_DIR=/app/data/uploaded_files
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+      - ./data/uploaded_files:/app/data/uploaded_files
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - ts-net
+
+  etl_worker:
+    build: ./backend
+    command: ["/bin/bash", "/app/etl_service/etl_worker.sh"]
+    environment:
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+      - REDIS_URL=redis://redis:6379/0
+      - UPLOAD_DIR=/app/data/uploaded_files
+    volumes:
+      - ./backend:/app
+      - ./data/uploaded_files:/app/data/uploaded_files
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - ts-net
+
+  forecast_worker:
+    build: ./backend
+    command: ["/bin/bash", "/app/forecast_service/forecast_worker.sh"]
+    environment:
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - ts-net
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    networks:
+      - ts-net
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d
+    ports:
+      - "3307:3306"
+    networks:
+      - ts-net
+
+volumes:
+  db_data:
+
+networks:
+  ts-net:
+    driver: bridge
