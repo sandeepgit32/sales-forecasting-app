@@ -4,7 +4,7 @@ A production-ready microservices-based time series forecasting system built with
 
 ## 📊 Architecture
 
-![Architecture Diagram](timeseriesforecasting.architecture.png)
+![Architecture Diagram](architecture.png)
 
 ### System Components
 
