@@ -41,10 +41,13 @@ def process_batch(batch_num):
     categories = [row[0] for row in res]
     print(f"Forecasting for batch {batch_num}, categories: {categories}")
 
-    conn = engine.connect()
     for cat in categories:
-        # load aggregated daily series for the category
-        df = pd.read_sql(text('SELECT `date`, SUM(sales) as sales FROM invoice_data WHERE category = :cat GROUP BY `date` ORDER BY `date`'), conn, params={'cat': cat})
+        # Use separate connection for read
+        df = pd.read_sql(
+            text('SELECT `date`, SUM(sales) as sales FROM invoice_data WHERE category = :cat GROUP BY `date` ORDER BY `date`'),
+            engine,
+            params={'cat': cat}
+        )
         if df.empty:
             continue
         df['date'] = pd.to_datetime(df['date'])
@@ -62,8 +65,9 @@ def process_batch(batch_num):
             for model in ('prophet','sarimax','holt_winters'):
                 forecasts.append({'forecast_date': fdate, 'category': cat, 'model_type': model, 'forecast_value': round(baseline, 2), 'lower_bound': None, 'upper_bound': None})
 
-        # upsert forecasts
-        trans_conn = conn.begin()
+        # upsert forecasts with new connection and transaction
+        conn = engine.connect()
+        trans = conn.begin()
         try:
             for f in forecasts:
                 sql = text('''
@@ -85,11 +89,13 @@ def process_batch(batch_num):
                     'upper_bound': f['upper_bound'],
                     'batch_num': batch_num
                 })
-            trans_conn.commit()
+            trans.commit()
+            print(f"Forecast saved for category: {cat}, {len(forecasts)} records")
         except Exception as e:
-            trans_conn.rollback()
+            trans.rollback()
             print('error writing forecasts for', cat, e)
-    conn.close()
+        finally:
+            conn.close()
 
 if __name__ == '__main__':
     print('Forecast worker started, waiting for jobs...')

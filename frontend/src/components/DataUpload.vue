@@ -59,6 +59,9 @@
         <button class="btn btn-sm btn-outline-primary mb-3" @click="fetchMetadata">
           <i class="bi bi-arrow-clockwise"></i> Refresh
         </button>
+        <div v-if="hasProcessingItems" class="badge bg-info ms-2">
+          <i class="bi bi-hourglass-split"></i> Auto-refreshing...
+        </div>
 
         <div v-if="loading" class="text-center py-4">
           <div class="spinner-border text-primary"></div>
@@ -76,10 +79,6 @@
                 <th>Filename</th>
                 <th>Uploaded At</th>
                 <th>Total Rows</th>
-                <th>Missing</th>
-                <th>Imputed</th>
-                <th>Inserted</th>
-                <th>Updated</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -89,13 +88,10 @@
                 <td><code>{{ item.batch_num }}</code></td>
                 <td>{{ item.original_filename }}</td>
                 <td>{{ formatDate(item.uploaded_at) }}</td>
-                <td>{{ item.num_total_rows }}</td>
-                <td><span class="badge bg-warning">{{ item.num_missing_rows }}</span></td>
-                <td><span class="badge bg-info">{{ item.num_imputed_rows }}</span></td>
-                <td><span class="badge bg-success">{{ item.num_inserted_rows }}</span></td>
-                <td><span class="badge bg-primary">{{ item.num_updated_rows }}</span></td>
+                <td>{{ item.num_total_rows || 'N/A' }}</td>
                 <td>
                   <span class="badge" :class="getStatusClass(item.status)">
+                    <span v-if="item.status === 'processing'" class="spinner-border spinner-border-sm me-1"></span>
                     {{ item.status }}
                   </span>
                 </td>
@@ -187,7 +183,7 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import axios from 'axios'
 import { Modal } from 'bootstrap'
 
@@ -205,6 +201,13 @@ export default {
     const metadata = ref([])
     const loading = ref(false)
     const selectedItem = ref(null)
+    let refreshInterval = null
+
+    const hasProcessingItems = computed(() => {
+      return metadata.value.some(item => 
+        item.status === 'uploaded' || item.status === 'processing'
+      )
+    })
 
     const handleDrop = (e) => {
       isDragging.value = false
@@ -243,6 +246,7 @@ export default {
         uploadMessageClass.value = 'alert-success'
         selectedFile.value = null
         fetchMetadata()
+        startAutoRefresh()
       } catch (error) {
         if (error.response?.status === 409) {
           uploadMessage.value = 'Duplicate file detected!'
@@ -262,10 +266,24 @@ export default {
       try {
         const response = await axios.get(`${API_URL}/metadata`)
         metadata.value = response.data
+        
+        // Stop auto-refresh if no items are processing
+        if (!hasProcessingItems.value && refreshInterval) {
+          clearInterval(refreshInterval)
+          refreshInterval = null
+        }
       } catch (error) {
         console.error('Error fetching metadata:', error)
       } finally {
         loading.value = false
+      }
+    }
+
+    const startAutoRefresh = () => {
+      if (!refreshInterval) {
+        refreshInterval = setInterval(() => {
+          fetchMetadata()
+        }, 3000) // Refresh every 3 seconds
       }
     }
 
@@ -307,6 +325,12 @@ export default {
       fetchMetadata()
     })
 
+    onUnmounted(() => {
+      if (refreshInterval) {
+        clearInterval(refreshInterval)
+      }
+    })
+
     return {
       selectedFile,
       isDragging,
@@ -317,6 +341,7 @@ export default {
       metadata,
       loading,
       selectedItem,
+      hasProcessingItems,
       handleDrop,
       handleFileSelect,
       clearFile,
