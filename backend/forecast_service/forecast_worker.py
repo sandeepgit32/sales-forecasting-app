@@ -48,12 +48,16 @@ def forecast_prophet(df, horizon):
         prophet_df = df.reset_index().rename(columns={'date': 'ds', 'sales': 'y'})
         
         # Create and fit model
+        # Use linear growth (default) since we don't know the cap for logistic growth
+        # We'll clip negative values post-prediction instead
         model = Prophet(
             interval_width=0.95,
             daily_seasonality=False,
             weekly_seasonality=True,
-            yearly_seasonality=True
+            yearly_seasonality=True,
+            changepoint_prior_scale=0.05  # More conservative to avoid overfitting
         )
+        
         model.fit(prophet_df)
         
         # Create future dataframe
@@ -65,6 +69,12 @@ def forecast_prophet(df, horizon):
         # Extract only future predictions
         forecast = forecast.tail(horizon)
         
+        # Ensure non-negative forecasts (sales can't be negative)
+        # Clip all values to 0 or above
+        forecast['yhat'] = forecast['yhat'].clip(lower=0)
+        forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=0)
+        forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=0)
+        
         return forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].rename(
             columns={'ds': 'date', 'yhat': 'forecast', 'yhat_lower': 'lower', 'yhat_upper': 'upper'}
         )
@@ -75,20 +85,22 @@ def forecast_prophet(df, horizon):
 def forecast_sarimax(df, horizon):
     """Generate forecast using SARIMAX"""
     try:
-        # Ensure we have enough data
-        if len(df) < 14:
+        # Ensure we have enough data (need at least 2 weeks for weekly seasonality)
+        if len(df) < 21:
             return None
         
-        # Fit SARIMAX model with simple parameters
+        # Use more appropriate ARIMA parameters for daily sales data
+        # (p,d,q) order: AR=2, differencing=1, MA=2
+        # Seasonal: AR=1, differencing=1, MA=1, period=7 (weekly)
         model = SARIMAX(
             df['sales'],
-            order=(1, 1, 1),
+            order=(2, 1, 2),
             seasonal_order=(1, 1, 1, 7),
             enforce_stationarity=False,
             enforce_invertibility=False
         )
         
-        fitted_model = model.fit(disp=False, maxiter=100)
+        fitted_model = model.fit(disp=False, maxiter=200, method='lbfgs')
         
         # Generate forecast
         forecast_result = fitted_model.get_forecast(steps=horizon)
@@ -106,6 +118,11 @@ def forecast_sarimax(df, horizon):
             'upper': forecast_ci.iloc[:, 1].values
         })
         
+        # Ensure non-negative forecasts (sales can't be negative)
+        result['forecast'] = result['forecast'].clip(lower=0)
+        result['lower'] = result['lower'].clip(lower=0)
+        result['upper'] = result['upper'].clip(lower=0)
+        
         return result
     except Exception as e:
         print(f"SARIMAX forecast error: {e}")
@@ -114,8 +131,8 @@ def forecast_sarimax(df, horizon):
 def forecast_holt_winters(df, horizon):
     """Generate forecast using Holt-Winters Exponential Smoothing"""
     try:
-        # Ensure we have enough data
-        if len(df) < 14:
+        # Ensure we have enough data (need at least 2 seasonal periods)
+        if len(df) < 21:
             return None
         
         # Fit Holt-Winters model
@@ -127,28 +144,35 @@ def forecast_holt_winters(df, horizon):
             initialization_method='estimated'
         )
         
-        fitted_model = model.fit()
+        fitted_model = model.fit(optimized=True)
         
-        # Generate forecast
-        forecast_values = fitted_model.forecast(steps=horizon)
+        # Generate forecast with simulation for better confidence intervals
+        forecast_result = fitted_model.forecast(steps=horizon)
         
-        # Calculate confidence intervals (approximate using standard error)
+        # Calculate confidence intervals with increasing uncertainty over time
         residuals = fitted_model.fittedvalues - df['sales']
         std_error = np.std(residuals)
-        
-        # 95% confidence interval (approximately 1.96 * std error)
-        margin = 1.96 * std_error
         
         # Create result dataframe
         last_date = df.index.max()
         forecast_dates = pd.date_range(start=last_date + timedelta(days=1), periods=horizon, freq='D')
         
+        # Calculate time-dependent confidence intervals
+        # Uncertainty increases with forecast horizon
+        time_factors = np.sqrt(np.arange(1, horizon + 1))
+        margins = 1.96 * std_error * time_factors
+        
         result = pd.DataFrame({
             'date': forecast_dates,
-            'forecast': forecast_values.values,
-            'lower': (forecast_values - margin).values,
-            'upper': (forecast_values + margin).values
+            'forecast': forecast_result.values,
+            'lower': (forecast_result.values - margins),
+            'upper': (forecast_result.values + margins)
         })
+        
+        # Ensure non-negative forecasts (sales can't be negative)
+        result['forecast'] = result['forecast'].clip(lower=0)
+        result['lower'] = result['lower'].clip(lower=0)
+        result['upper'] = result['upper'].clip(lower=0)
         
         return result
     except Exception as e:
@@ -174,6 +198,9 @@ def process_batch(batch_num):
             
         df['date'] = pd.to_datetime(df['date'])
         df = df.set_index('date')
+        
+        # Ensure sales are non-negative before forecasting
+        df['sales'] = df['sales'].clip(lower=0)
 
         # Generate forecasts for each model
         forecasts = []
