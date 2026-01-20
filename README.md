@@ -277,7 +277,7 @@ curl "http://localhost:5000/forecast-data?category=Electronics&model_type=prophe
 | GET | `/health` | Health check | - |
 | POST | `/upload` | Upload CSV file | - |
 | GET | `/metadata` | Get upload history | - |
-| GET | `/invoice-data` | Get sales data | `category`, `start_date`, `end_date`, `limit` |
+| GET | `/invoice-data` | Get sales data | `category`, `batch_num`, `start_date`, `end_date`, `limit` |
 | GET | `/forecast-data` | Get forecasts | `category`, `model_type`, `start_date`, `end_date`, `limit` |
 
 ### Response Examples

@@ -120,24 +120,31 @@ def metadata_list():
 
 @app.route('/invoice-data', methods=['GET'])
 def invoice_data_list():
-    """Get invoice data with optional filtering by category and date range"""
+    """Get invoice data with optional filtering by category, batch_num and date range"""
     db = get_db()
     try:
         category = request.args.get('category')
+        batch_num = request.args.get('batch_num')
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        limit = int(request.args.get('limit', 1000))
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 15))
         
         query = db.query(InvoiceData)
         
         if category:
             query = query.filter(InvoiceData.category == category)
+        if batch_num:
+            query = query.filter(InvoiceData.batch_num == batch_num)
         if start_date:
             query = query.filter(InvoiceData.date >= start_date)
         if end_date:
             query = query.filter(InvoiceData.date <= end_date)
         
-        items = query.order_by(InvoiceData.date.desc()).limit(limit).all()
+        total_items = query.count()
+        total_pages = (total_items + limit - 1) // limit
+
+        items = query.order_by(InvoiceData.date.desc()).offset((page - 1) * limit).limit(limit).all()
         result = []
         for item in items:
             result.append({
@@ -149,7 +156,16 @@ def invoice_data_list():
                 'batch_num': item.batch_num,
                 'version': item.version
             })
-        return jsonify(result)
+        
+        return jsonify({
+            'data': result,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total_items': total_items,
+                'total_pages': total_pages
+            }
+        })
     finally:
         db.close()
 

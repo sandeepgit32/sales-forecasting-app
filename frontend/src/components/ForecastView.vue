@@ -114,7 +114,7 @@ export default {
     const loadCategories = async () => {
       try {
         const response = await axios.get(`${API_URL}/invoice-data?limit=10000`)
-        const uniqueCategories = [...new Set(response.data.map(item => item.category))]
+        const uniqueCategories = [...new Set(response.data.data.map(item => item.category))]
         categories.value = uniqueCategories.sort()
       } catch (error) {
         console.error('Error loading categories:', error)
@@ -133,7 +133,7 @@ export default {
         
         // Aggregate by date (sum sales per day)
         const aggregated = {}
-        historicalResponse.data.forEach(item => {
+        historicalResponse.data.data.forEach(item => {
           if (!aggregated[item.date]) {
             aggregated[item.date] = 0
           }

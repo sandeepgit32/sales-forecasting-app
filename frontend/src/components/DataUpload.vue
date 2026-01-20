@@ -85,7 +85,7 @@
             </thead>
             <tbody>
               <tr v-for="item in metadata" :key="item.batch_num">
-                <td><code>{{ item.batch_num }}</code></td>
+                <td><a href="#" @click.prevent="openInvoiceModal(item.batch_num)"><code>{{ item.batch_num }}</code></a></td>
                 <td>{{ item.original_filename }}</td>
                 <td>{{ formatDate(item.uploaded_at) }}</td>
                 <td>{{ item.num_total_rows || 'N/A' }}</td>
@@ -179,6 +179,66 @@
         </div>
       </div>
     </div>
+
+    <!-- Invoice Data Modal -->
+    <div class="modal fade" id="invoiceModal" tabindex="-1">
+      <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Invoice Data - {{ selectedBatchForInvoice }}</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div v-if="invoiceLoading" class="text-center py-5">
+              <div class="spinner-border text-primary"></div>
+              <p class="mt-2">Loading invoice data...</p>
+            </div>
+            
+            <div v-else class="table-responsive">
+              <table class="table table-striped table-sm">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Product ID</th>
+                    <th>Category</th>
+                    <th>Sales</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(inv, idx) in invoiceData" :key="idx">
+                    <td>{{ inv.date }}</td>
+                    <td>{{ inv.product_id }}</td>
+                    <td>{{ inv.category }}</td>
+                    <td>{{ inv.sales }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-if="totalPages > 1" class="d-flex justify-content-center mt-3">
+                <nav aria-label="Page navigation">
+                  <ul class="pagination">
+                    <li class="page-item" :class="{ disabled: currentPage === 1 }">
+                      <a class="page-link" href="#" @click.prevent="changePage(currentPage - 1)">Previous</a>
+                    </li>
+                    <li class="page-item disabled">
+                      <span class="page-link">Page {{ currentPage }} of {{ totalPages }}</span>
+                    </li>
+                    <li class="page-item" :class="{ disabled: currentPage === totalPages }">
+                      <a class="page-link" href="#" @click.prevent="changePage(currentPage + 1)">Next</a>
+                    </li>
+                  </ul>
+                </nav>
+              </div>
+              <div v-if="invoiceData.length === 0" class="alert alert-warning">
+                No invoices found for this batch.
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -201,6 +261,12 @@ export default {
     const metadata = ref([])
     const loading = ref(false)
     const selectedItem = ref(null)
+    const invoiceData = ref([])
+    const invoiceLoading = ref(false)
+    const selectedBatchForInvoice = ref('')
+    const currentPage = ref(1)
+    const totalPages = ref(1)
+    const perPage = 15
     let refreshInterval = null
 
     const hasProcessingItems = computed(() => {
@@ -300,7 +366,47 @@ export default {
       }
     }
 
-    const formatDate = (dateStr) => {
+    const openInvoiceModal = async (batchNum) => {
+      selectedBatchForInvoice.value = batchNum
+      invoiceData.value = []
+      currentPage.value = 1
+      totalPages.value = 1
+      invoiceLoading.value = true
+      
+      const modal = new Modal(document.getElementById('invoiceModal'))
+      modal.show()
+      
+      await fetchInvoiceData()
+    }
+
+    const fetchInvoiceData = async () => {
+      invoiceLoading.value = true
+      try {
+        const response = await axios.get(`${API_URL}/invoice-data`, {
+          params: {
+            batch_num: selectedBatchForInvoice.value,
+            page: currentPage.value,
+            limit: perPage
+          }
+        })
+        invoiceData.value = response.data.data
+        totalPages.value = response.data.pagination.total_pages
+      } catch (error) {
+        console.error('Error fetching invoices:', error)
+      } finally {
+        invoiceLoading.value = false
+      }
+    }
+
+    const changePage = (page) => {
+      if (page >= 1 && page <= totalPages.value) {
+        currentPage.value = page
+        fetchInvoiceData()
+      }
+    }
+
+    const formatDate = (dateStr) => { 
+
       if (!dateStr) return 'N/A'
       return new Date(dateStr).toLocaleString()
     }
@@ -332,6 +438,13 @@ export default {
     })
 
     return {
+      invoiceData,
+      invoiceLoading,
+      selectedBatchForInvoice,
+      currentPage,
+      totalPages,
+      openInvoiceModal,
+      changePage,
       selectedFile,
       isDragging,
       uploading,
