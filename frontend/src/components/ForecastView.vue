@@ -176,6 +176,7 @@ export default {
         historicalData.value = Object.keys(aggregated)
           .sort()
           .map(date => ({ date, sales: aggregated[date] }))
+          .slice(-60)
 
         // Load forecast data
         const forecastResponse = await axios.get(`${API_URL}/forecast-data`, {
@@ -188,6 +189,7 @@ export default {
         
         forecastData.value = forecastResponse.data
           .sort((a, b) => new Date(a.forecast_date) - new Date(b.forecast_date))
+          .slice(0, 30)
         
         currentPage.value = 1
         loading.value = false
