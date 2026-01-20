@@ -71,7 +71,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="item in forecastData" :key="item.forecast_date">
+                <tr v-for="item in paginatedForecastData" :key="item.forecast_date">
                   <td>{{ item.forecast_date }}</td>
                   <td><strong>{{ formatNumber(item.forecast_value) }}</strong></td>
                   <td>{{ formatNumber(item.lower_bound) }}</td>
@@ -79,6 +79,23 @@
                 </tr>
               </tbody>
             </table>
+          </div>
+          
+          <!-- Pagination -->
+          <div v-if="totalPages > 1" class="d-flex justify-content-center mt-3">
+            <nav aria-label="Page navigation">
+              <ul class="pagination">
+                <li class="page-item" :class="{ disabled: currentPage === 1 }">
+                  <a class="page-link" href="#" @click.prevent="changePage(currentPage - 1)">Previous</a>
+                </li>
+                <li class="page-item disabled">
+                  <span class="page-link">Page {{ currentPage }} of {{ totalPages }}</span>
+                </li>
+                <li class="page-item" :class="{ disabled: currentPage === totalPages }">
+                  <a class="page-link" href="#" @click.prevent="changePage(currentPage + 1)">Next</a>
+                </li>
+              </ul>
+            </nav>
           </div>
         </div>
       </div>
@@ -91,7 +108,7 @@
 </template>
 
 <script>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, computed } from 'vue'
 import axios from 'axios'
 import { Chart, registerables } from 'chart.js'
 
@@ -109,7 +126,23 @@ export default {
     const historicalData = ref([])
     const forecastData = ref([])
     const chartCanvas = ref(null)
+    const currentPage = ref(1)
+    const itemsPerPage = 15
     let chartInstance = null
+
+    const totalPages = computed(() => Math.ceil(forecastData.value.length / itemsPerPage))
+    
+    const paginatedForecastData = computed(() => {
+      const start = (currentPage.value - 1) * itemsPerPage
+      const end = start + itemsPerPage
+      return forecastData.value.slice(start, end)
+    })
+
+    const changePage = (page) => {
+      if (page >= 1 && page <= totalPages.value) {
+        currentPage.value = page
+      }
+    }
 
     const loadCategories = async () => {
       try {
@@ -155,7 +188,8 @@ export default {
         
         forecastData.value = forecastResponse.data
           .sort((a, b) => new Date(a.forecast_date) - new Date(b.forecast_date))
-
+        
+        currentPage.value = 1
         loading.value = false
         await nextTick()
         renderChart()
@@ -328,6 +362,10 @@ export default {
       loading,
       historicalData,
       forecastData,
+      paginatedForecastData,
+      currentPage,
+      totalPages,
+      changePage,
       chartCanvas,
       loadData,
       getModelName,
